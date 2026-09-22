@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import os
-import time
 import traceback
 
 from dotenv import load_dotenv
@@ -102,44 +101,48 @@ def main():
 
     mode = "webhook" if webhook_url else "polling"
     logger.info("J-Rock starting (mode: %s)...", mode)
-    while True:
-        app = ApplicationBuilder().token(token).post_init(_post_init).build()
-        register_handlers(app)
-        app.add_error_handler(error_handler)
+    # NOTE: single run per process. Do NOT loop-and-rebuild the Application
+    # in-process: PTB closes the event loop on shutdown, so a second
+    # run_webhook()/run_polling() in the same process dies with
+    # "RuntimeError: Event loop is closed". On crash, notify admins and exit
+    # non-zero — Railway/Docker restarts the worker with a fresh interpreter.
+    app = ApplicationBuilder().token(token).post_init(_post_init).build()
+    register_handlers(app)
+    app.add_error_handler(error_handler)
+    try:
+        if webhook_url:
+            app.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=token,
+                webhook_url=webhook_url,
+                allowed_updates=["message"],
+                drop_pending_updates=True,
+            )
+        else:
+            app.run_polling(
+                allowed_updates=["message"],
+                bootstrap_retries=10,
+            )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:
+        logger.error("Fatal, exiting for platform restart: %s", e, exc_info=True)
+        # surface fatal errors to admins via a direct API call
         try:
-            if webhook_url:
-                app.run_webhook(
-                    listen="0.0.0.0",
-                    port=port,
-                    url_path=token,
-                    webhook_url=webhook_url,
-                    allowed_updates=["message"],
-                    drop_pending_updates=True,
-                )
-            else:
-                app.run_polling(
-                    allowed_updates=["message"],
-                    bootstrap_retries=10,
-                )
-            break  # clean exit
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as e:  # transient network error shouldn't crash the process
-            logger.error("Crashed, restarting in 5s: %s", e, exc_info=True)
-            # surface fatal errors to admins via a direct API call
-            try:
-                b = Bot(token)
-                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-                loop = asyncio.new_event_loop()
-                for aid in _admin_ids():
-                    try:
-                        loop.run_until_complete(b.send_message(aid, f"❌ Crash:\n{tb[-3500:]}"))
-                    except Exception:
-                        pass
-                loop.close()
-            except Exception:
-                pass
-            time.sleep(5)
+            b = Bot(token)
+            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            for aid in _admin_ids():
+                try:
+                    loop.run_until_complete(b.send_message(aid, f"❌ Crash:\n{tb[-3500:]}"))
+                except Exception:
+                    pass
+            loop.close()
+        except Exception:
+            pass
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
