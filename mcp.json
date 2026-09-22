@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/root/jrock"],
+      "enabled": true,
+      "description": "Local file read/list"
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "enabled": true,
+      "description": "Web fetch"
+    },
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "/root/jrock/agent.db"],
+      "enabled": true,
+      "description": "SQLite memory"
+    }
+  }
+}

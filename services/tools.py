@@ -9,6 +9,32 @@ will then be able to use it automatically, no new Telegram command needed.
 """
 from services.router_client import web_search, web_fetch
 
+try:
+    from services.mcp_client import MCP_TOOL_DEFINITIONS, MCP_TOOL_REGISTRY
+except Exception:
+    MCP_TOOL_DEFINITIONS, MCP_TOOL_REGISTRY = [], {}
+
+
+def load_skill_files() -> list[dict]:
+    """Load skills/*.md as {name, instructions}."""
+    import os
+    out = []
+    d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
+    if not os.path.isdir(d):
+        return out
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".md") or fn == "README.md":
+            continue
+        try:
+            with open(os.path.join(d, fn), "r", encoding="utf-8") as f:
+                txt = f.read()
+            lines = txt.strip().splitlines()
+            name = lines[0].lstrip("# ").strip() if lines else fn[:-3]
+            out.append({"name": name or fn[:-3], "file": fn, "instructions": txt})
+        except Exception:
+            pass
+    return out
+
 
 TOOL_DEFINITIONS = [
     {
@@ -77,4 +103,7 @@ def _web_fetch(user, url: str) -> str:
 TOOL_REGISTRY = {
     "web_search": _web_search,
     "web_fetch": _web_fetch,
+    **MCP_TOOL_REGISTRY,
 }
+
+TOOL_DEFINITIONS = TOOL_DEFINITIONS + MCP_TOOL_DEFINITIONS

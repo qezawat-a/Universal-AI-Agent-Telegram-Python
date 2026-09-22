@@ -33,21 +33,39 @@ def init_db():
 
 
 def _sync_missing_columns():
+    # SQLite has no ADD COLUMN IF NOT EXISTS -> inspect + add only missing.
+    # Works on Postgres too.
+    wanted = {
+        "username": "VARCHAR(100)",
+        "full_name": "VARCHAR(200)",
+        "base_url": "VARCHAR(500)",
+        "api_key_encrypted": "TEXT",
+        "active_model": "VARCHAR(200)",
+        "active_provider": "VARCHAR(100)",
+        "system_prompt": "TEXT",
+        "soul_persona": "TEXT",
+        "soul_style": "TEXT",
+        "tts_enabled": "BOOLEAN",
+        "tts_voice": "VARCHAR(50)",
+        "memory_window": "INTEGER",
+        "current_session_id": "INTEGER",
+        "created_at": "TIMESTAMP",
+    }
+    try:
+        insp = inspect(engine)
+        existing = {c["name"] for c in insp.get_columns("users")} if insp.has_table("users") else set()
+    except Exception:
+        existing = set()
+    missing = [(k, v) for k, v in wanted.items() if k not in existing]
+    if not missing:
+        return
     with engine.begin() as conn:
-        conn.execute(text("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100);
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(200);
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS base_url VARCHAR(500);
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_encrypted TEXT;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS active_model VARCHAR(200);
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS tts_enabled BOOLEAN;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS tts_voice VARCHAR(50);
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS memory_window INTEGER;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id INTEGER;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;
-        """))
-    logger.info("init_db: synced users columns (added any that were missing)")
+        for col, typ in missing:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {typ}"))
+            except Exception as e:
+                logger.warning("add column %s failed (may exist): %s", col, e)
+    logger.info("init_db: synced users columns (added %s)", [c for c, _ in missing])
 
 
 def _ensure_sessions_table():

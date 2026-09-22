@@ -1,4 +1,15 @@
-from telegram.ext import CommandHandler, MessageHandler, filters
+from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
+
+import os
+
+
+def _user_filter():
+    ids = {x.strip() for x in
+           (os.getenv("ALLOWED_USER_ID", "") + "," + os.getenv("ADMIN_IDS", "")).split(",")
+           if x.strip().isdigit()}
+    if not ids:
+        return None
+    return filters.User(user_id={int(i) for i in ids})
 
 from .chat_handlers import (
     cmd_start,
@@ -20,35 +31,34 @@ from .chat_handlers import (
 from .media_handlers import handle_photo, handle_voice
 from .memory_handlers import cmd_history, cmd_forget, cmd_setpref, cmd_sessions, cmd_newchat, cmd_resume, cmd_clearprefs, cmd_skill
 from .router_handlers import cmd_image, cmd_web, cmd_fetch
+from .soul_handlers import cmd_soul
+from .provider_handlers import cmd_provider
+from .mcp_handlers import cmd_mcp
+from .settings_handlers import cmd_menu, cmd_settings, cmd_gateway, cmd_gen, on_menu_button
 
 
 def register_handlers(app):
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("setapi", cmd_setapi))
-    app.add_handler(CommandHandler("models", cmd_models))
-    app.add_handler(CommandHandler("setmodel", cmd_setmodel))
-    app.add_handler(CommandHandler("setsystem", cmd_setsystem))
-    app.add_handler(CommandHandler("setmemory", cmd_setmemory))
-    app.add_handler(CommandHandler("tts", cmd_tts))
-    app.add_handler(CommandHandler("profile", cmd_profile))
-    app.add_handler(CommandHandler("verbose", cmd_verbose))
-    app.add_handler(CommandHandler("theme", cmd_theme))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("research", cmd_research))
-    app.add_handler(CommandHandler("history", cmd_history))
-    app.add_handler(CommandHandler("sessions", cmd_sessions))
-    app.add_handler(CommandHandler("newchat", cmd_newchat))
-    app.add_handler(CommandHandler("resume", cmd_resume))
-    app.add_handler(CommandHandler("forget", cmd_forget))
-    app.add_handler(CommandHandler("setpref", cmd_setpref))
-    app.add_handler(CommandHandler("clearprefs", cmd_clearprefs))
-    app.add_handler(CommandHandler("skill", cmd_skill))
-    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
-    app.add_handler(CommandHandler("image", cmd_image))
-    app.add_handler(CommandHandler("web", cmd_web))
-    app.add_handler(CommandHandler("fetch", cmd_fetch))
+    uf = _user_filter()
+    kw = {"filters": uf} if uf is not None else {}
+    for cmd, fn in [
+        ("start", cmd_start), ("help", cmd_help), ("menu", cmd_menu),
+        ("settings", cmd_settings), ("gateway", cmd_gateway), ("gen", cmd_gen),
+        ("soul", cmd_soul), ("provider", cmd_provider), ("mcp", cmd_mcp),
+        ("setapi", cmd_setapi), ("models", cmd_models), ("setmodel", cmd_setmodel),
+        ("setsystem", cmd_setsystem), ("setmemory", cmd_setmemory), ("tts", cmd_tts),
+        ("profile", cmd_profile), ("verbose", cmd_verbose), ("theme", cmd_theme),
+        ("status", cmd_status), ("research", cmd_research), ("history", cmd_history),
+        ("sessions", cmd_sessions), ("newchat", cmd_newchat), ("resume", cmd_resume),
+        ("forget", cmd_forget), ("setpref", cmd_setpref), ("clearprefs", cmd_clearprefs),
+        ("skill", cmd_skill), ("broadcast", cmd_broadcast), ("image", cmd_image),
+        ("web", cmd_web), ("fetch", cmd_fetch),
+    ]:
+        app.add_handler(CommandHandler(cmd, fn, **kw))
+    app.add_handler(CallbackQueryHandler(on_menu_button, pattern=r"^m:"))
 
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    msg_kw = {"filters": (filters.PHOTO & uf)} if uf is not None else {"filters": filters.PHOTO}
+    voice_kw = {"filters": (filters.VOICE & uf)} if uf is not None else {"filters": filters.VOICE}
+    text_kw = {"filters": ((filters.TEXT & ~filters.COMMAND) & uf)} if uf is not None else {"filters": filters.TEXT & ~filters.COMMAND}
+    app.add_handler(MessageHandler(msg_kw["filters"], handle_photo))
+    app.add_handler(MessageHandler(voice_kw["filters"], handle_voice))
+    app.add_handler(MessageHandler(text_kw["filters"], handle_text))

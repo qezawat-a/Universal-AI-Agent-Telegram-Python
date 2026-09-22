@@ -1,6 +1,5 @@
 import os
 import tempfile
-from openai import OpenAI
 from services.llm_client import get_client
 
 

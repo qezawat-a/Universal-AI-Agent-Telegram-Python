@@ -1,4 +1,4 @@
-"""OmniAgent — self-hosted Telegram AI agent (entry point)."""
+"""J-Rock — self-hosted Telegram AI agent (entry point)."""
 import asyncio
 import logging
 import os
@@ -22,8 +22,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 COMMANDS = [
-    ("start", "شروع"),
+    ("start", "شروع J-Rock"),
+    ("menu", "منوی همه گزینه‌ها"),
     ("help", "راهنما"),
+    ("settings", "تنظیمات"),
+    ("gateway", "وضعیت گیت‌وی"),
+    ("soul", "پرامپت/پرسونا/استایل"),
+    ("skill", "اسکیل‌ها"),
+    ("provider", "پرووایدرها + auto"),
+    ("mcp", "ابزارهای MCP"),
+    ("gen", "تولید هرچیزی"),
     ("setapi", "اندپوینت + کلید"),
     ("models", "لیست مدل‌ها"),
     ("setmodel", "انتخاب مدل"),
@@ -34,7 +42,6 @@ COMMANDS = [
     ("status", "وضعیت بات"),
     ("verbose", "سطح نمایش ابزار"),
     ("theme", "تم نمایش"),
-    ("skill", "اسکیل/پرسونا"),
     ("history", "تاریخچه سشن فعلی"),
     ("sessions", "لیست سشن‌ها"),
     ("newchat", "سشن جدید"),
@@ -94,7 +101,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
 
     mode = "webhook" if webhook_url else "polling"
-    logger.info("OmniAgent starting (mode: %s)...", mode)
+    logger.info("J-Rock starting (mode: %s)...", mode)
     while True:
         app = ApplicationBuilder().token(token).post_init(_post_init).build()
         register_handlers(app)

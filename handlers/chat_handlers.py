@@ -1,4 +1,4 @@
-"""Core chat + setup handlers for OmniAgent."""
+"""Core chat + setup handlers for J-Rock."""
 import asyncio
 import logging
 import os
@@ -12,10 +12,22 @@ logger = logging.getLogger(__name__)
 from services.llm_client import encrypt_key, fetch_models, chat_completion, DEFAULT_SYSTEM_PROMPT, run_agentic, rank_models, probe_model
 from services.memory_service import MemoryService
 from services.message_utils import split_message
+from services.soul_service import build_system_prompt, load_default_soul
 from services.tts_service import text_to_speech
 from services.tools import TOOL_DEFINITIONS, TOOL_REGISTRY
 
 memory = MemoryService()
+_JROCK_SOUL = None
+
+
+def _default_soul() -> str:
+    global _JROCK_SOUL
+    if _JROCK_SOUL is None:
+        try:
+            _JROCK_SOUL = load_default_soul()
+        except Exception:
+            _JROCK_SOUL = DEFAULT_SYSTEM_PROMPT
+    return _JROCK_SOUL
 
 
 def _admin_ids():
@@ -65,30 +77,41 @@ def _apply_theme(theme: str, text: str) -> str:
 
 
 async def _ensure_model(db, user) -> None:
-    """Auto-pick a usable chat model on first use so the user never has to
-    /setmodel manually. Tries ranked candidates (env DEFAULT_MODEL first, if it
-    actually exists in the list) with a real probe call and keeps the first that
-    works. A DEFAULT_MODEL with no credentials is skipped, not forced."""
+    """Auto-pick best usable (provider, model) by real probe. No blind fallback."""
     if user.active_model:
         return
     try:
-        models = await asyncio.to_thread(fetch_models, user)
-        if not models:
-            return
-        ranked = rank_models(models)
-        default = os.getenv("DEFAULT_MODEL")
-        if default and default in models:
-            ranked = [default] + ranked
-        for candidate in ranked[:8]:
-            try:
-                await asyncio.to_thread(probe_model, user, candidate)
-                user.active_model = candidate
-                db.commit()
-                logger.info("auto-selected model %s for user %s", candidate, user.telegram_id)
+        from services.provider_router import auto_select
+        try:
+            pname, base_url, api_key, model = await asyncio.to_thread(auto_select, user, db)
+        except Exception as e:
+            logger.warning("provider-router auto failed, single-provider fallback: %s", e)
+            models = await asyncio.to_thread(fetch_models, user)
+            if not models:
                 return
-            except Exception as e:
-                logger.warning("model %s not usable, trying next: %s", candidate, e)
-        logger.warning("no usable model auto-selected for user %s", user.telegram_id)
+            ranked = rank_models(models)
+            default = os.getenv("DEFAULT_MODEL")
+            if default and default in models:
+                ranked = [default] + ranked
+            for candidate in ranked[:8]:
+                try:
+                    await asyncio.to_thread(probe_model, user, candidate)
+                    user.active_model = candidate
+                    db.commit()
+                    return
+                except Exception as ex:
+                    logger.warning("model %s not usable: %s", candidate, ex)
+            return
+        # router succeeded: pin provider URL/key to user so get_client uses it
+        user.base_url = base_url
+        try:
+            user.api_key_encrypted = encrypt_key(api_key)
+        except Exception:
+            pass
+        user.active_provider = pname
+        user.active_model = model
+        db.commit()
+        logger.info("auto-selected %s / %s for %s", pname, model, user.telegram_id)
     except Exception as e:
         logger.warning("auto model selection failed for %s: %s", user.telegram_id, e)
 
@@ -100,11 +123,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db, update.effective_user.id, update.effective_user.username, update.effective_user.full_name
         )
         await update.message.reply_text(
-            "👋 سلام! من OmniAgent‌ـم.\n"
-            "۱) با /setapi <base_url> <api_key> اندپوینتت رو تنظیم کن\n"
-            "۲) با /models لیست مدل‌های اندپوینت رو ببین\n"
-            "۳) با /setmodel مدلت رو انتخاب کن\n"
-            "بعد هرچی خواستی بپرس. با /help لیست کامل دستورات."
+            "👋 سلام! من J-Rock‌ـم.\n"
+            "۱) با /setapi <base_url> <api_key> یا /provider add اندپوینتت رو تنظیم کن\n"
+            "۲) با /models یا /provider list مدل‌ها رو ببین (auto انتخاب می‌کنم)\n"
+            "۳) با /soul show پرسونای Fable منو ببین\n"
+            "بعد هرچی خواستی بپرس. با /menu یا /help همه گزینه‌ها."
         )
     finally:
         db.close()
@@ -112,11 +135,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/start - شروع\n"
-        "/setapi <base_url> <api_key> - تنظیم اندپوینت و کلید\n"
-        "/models - لیست مدل‌های اندپوینت\n"
-        "/setmodel <name> - انتخاب مدل (auto = انتخاب خودکار)\n"
-        "/setsystem <prompt> - تنظیم سیستم‌پرامپت (reset = پیش‌فرض)\n"
+        "🤖 J-Rock — type / to see all\n"
+        "/menu - منوی دکمه‌ای\n"
+        "/settings - تنظیمات\n"
+        "/gateway - وضعیت گیت‌وی\n"
+        "/soul show|set|reset - پرامپت/پرسونا/استایل\n"
+        "/provider list|add|use|auto|del - پرووایدرها\n"
+        "/mcp list|fs|read|sql - ابزارهای MCP\n"
+        "/gen <text|image|code> <prompt> - تولید هرچی مدل ساپورت کنه\n"
+        "/setapi <base_url> <api_key> - تنظیم سریع اندپوینت\n"
+        "/models - لیست مدل‌ها\n"
+        "/setmodel <name>|auto - انتخاب مدل\n"
+        "/setsystem <prompt>|reset - سیستم‌پرامپت (قدیمی، /soul جدید)\n"
         "/setmemory <n> - تعداد پیام‌های حافظه\n"
         "/tts on|off - صدای خروجی\n"
         "/profile - پروفایل\n"
@@ -340,7 +370,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             skill_mark = "(هیچ‌کدام)"
         lines = [
-            "📊 وضعیت OmniAgent:",
+            "📊 وضعیت J-Rock:",
+            f"provider: {user.active_provider or 'auto'}",
             f"model: {user.active_model or os.getenv('DEFAULT_MODEL', '(انتخاب خودکار)')}",
             f"session: #{sess.id} ({sess.message_count} پیام)",
             f"verbose: {prefs.get('verbose', '1')}",
@@ -414,9 +445,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         verbose = int(memory.get_preference(db, user, "verbose", "1") or "1")
         theme = memory.get_preference(db, user, "theme", "default") or "default"
 
-        # active skill (if any) is appended to the system prompt so it shapes
+        # active skill (if any) is appended to the soul system prompt so it shapes
         # every reply without overwriting the user's base persona.
-        system = user.system_prompt or DEFAULT_SYSTEM_PROMPT
+        system = build_system_prompt(user, _default_soul())
         skill_name = memory.get_preference(db, user, "active_skill")
         if skill_name:
             skill = memory.get_skill(db, user, skill_name)

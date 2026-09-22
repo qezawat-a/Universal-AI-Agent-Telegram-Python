@@ -1,0 +1,20 @@
+# Default provider chain for J-Rock.
+# Order matters: router probes in order, picks first provider+model that passes probe.
+# Secrets MUST come from env (.env), never commit real keys here.
+providers:
+  - name: cline-worker
+    base_url: ${AI_BASE_URL:-https://cline2api-workers.azarnezam0.workers.dev/v1}
+    api_key_env: AI_API_KEY
+    enabled: true
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    enabled: true
+  - name: ollama
+    base_url: http://localhost:11434/v1
+    api_key_env: OLLAMA_API_KEY
+    enabled: true
+  - name: lmstudio
+    base_url: http://localhost:1234/v1
+    api_key_env: LMSTUDIO_API_KEY
+    enabled: true

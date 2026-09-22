@@ -1,5 +1,5 @@
 from sqlalchemy import desc
-from db.models import User, ConversationHistory, Session, UserPreference, Skill
+from db.models import User, ConversationHistory, Session, UserPreference, Skill, Provider
 
 
 class MemoryService:
@@ -202,3 +202,39 @@ class MemoryService:
 
     def all_users(self, db):
         return db.query(User).all()
+
+    # ---- providers (multi base_url + key) ----
+
+    def add_provider(self, db, user, name, base_url, api_key_encrypted=None):
+        from services.llm_client import encrypt_key as _enc
+        enc = api_key_encrypted
+        # allow passing raw key: encrypt if it doesn't look encrypted
+        if enc and not enc.startswith("gAAAA"):
+            try:
+                enc = _enc(enc)
+            except Exception:
+                pass
+        existing = db.query(Provider).filter(
+            Provider.telegram_id == user.telegram_id, Provider.name == name).first()
+        if existing:
+            existing.base_url = base_url
+            if enc:
+                existing.api_key_encrypted = enc
+            existing.enabled = True
+        else:
+            db.add(Provider(telegram_id=user.telegram_id, name=name,
+                            base_url=base_url, api_key_encrypted=enc))
+        db.commit()
+
+    def list_providers(self, db, user):
+        return db.query(Provider).filter(
+            Provider.telegram_id == user.telegram_id).order_by(Provider.name).all()
+
+    def delete_provider(self, db, user, name) -> bool:
+        r = db.query(Provider).filter(
+            Provider.telegram_id == user.telegram_id, Provider.name == name).first()
+        if r:
+            db.delete(r)
+            db.commit()
+            return True
+        return False
