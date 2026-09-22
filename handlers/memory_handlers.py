@@ -184,7 +184,9 @@ async def cmd_skill(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"• {s.name}{mark}")
             for f in files:
                 mark = " ✅" if f["name"] == active else ""
-                lines.append(f"• 📁 {f['name']}{mark} ({f['file']})")
+                desc = f.get("description") or ""
+                extra = f" — {desc[:80]}" if desc else f" ({f['file']})"
+                lines.append(f"• 📁 {f['name']}{mark}{extra}")
             await update.message.reply_text("\n".join(lines))
             return
         if sub == "add":
@@ -237,20 +239,25 @@ async def cmd_skill(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if sub == "import":
             if len(context.args) < 2:
-                await update.message.reply_text("Usage: /skill import <file.md>")
+                await update.message.reply_text("Usage: /skill import <file.md|folder>  (see /skill list)")
                 return
             import os as _os
-            fn = context.args[1].strip()
-            base = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "skills", fn)
-            if not _os.path.isfile(base):
-                await update.message.reply_text(f"⛔ فایل skills/{fn} پیدا نشد.")
+            given = context.args[1].strip()
+            skills_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "skills")
+            candidates = [
+                _os.path.join(skills_dir, given),
+                _os.path.join(skills_dir, given, "SKILL.md"),
+                _os.path.join(skills_dir, given, "skill.md"),
+            ]
+            base = next((p for p in candidates if _os.path.isfile(p)), None)
+            if base is None:
+                await update.message.reply_text(f"⛔ skills/{given} پیدا نشد. با /skill list ببین.")
                 return
             try:
-                with open(base, "r", encoding="utf-8") as f:
-                    txt = f.read()
-                name = txt.strip().splitlines()[0].lstrip("# ").strip() or fn[:-3]
-                memory.add_skill(db, user, name, txt)
-                await update.message.reply_text(f"✅ Skill «{name}» از فایل import شد.")
+                from services.tools import _parse_skill_file as _psf
+                s = _psf(base, given)
+                memory.add_skill(db, user, s["name"], s["instructions"])
+                await update.message.reply_text(f"✅ Skill «{s['name']}» import شد. با /skill use {s['name']} فعالش کن.")
             except Exception as e:
                 await update.message.reply_text(f"⚠️ import failed: {e}")
             return
