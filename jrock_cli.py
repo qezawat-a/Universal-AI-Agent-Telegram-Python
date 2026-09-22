@@ -30,7 +30,7 @@ memory = MemoryService()
 SOUL = load_default_soul()
 HELP = (
     "/soul show|set|reset /skill list|add|use|del|import /provider list|auto|use|add|del "
-    "/mcp list|fs|read|sql /models /setmodel /settings /status /gen /newchat /sessions /resume /forget /quit"
+    "/mcp list|fs|read|sql /models /setmodel /settings /status /gen /newchat /sessions /resume /forget /think /autocompact /quit"
 )
 
 def get_user(db):
@@ -122,14 +122,51 @@ def do_cmd(db, user, line: str) -> bool:
     elif cmd == "/skill":
         if not args or args[0] == "list":
             for s in memory.list_skills(db, user):
-                say(f"• {s.name}")
+                mark = " ✅" if s.name == memory.get_preference(db, user, "active_skill") else ""
+                say(f"• {s.name}{mark}")
             for f in load_skill_files():
-                say(f"• 📁 {f['name']} ({f['file']})")
+                mark = " ✅" if f["name"] == memory.get_preference(db, user, "active_skill") else ""
+                say(f"• 📁 {f['name']}{mark} — {(f.get('description') or '')[:80]}")
         elif len(args) >= 2 and args[0] == "use":
             memory.set_preference(db, user, "active_skill", args[1])
             say(f"✅ active_skill={args[1]}", "green")
+        elif len(args) >= 2 and args[0] == "import":
+            import os as _os
+            given = args[1]
+            sdir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "skills")
+            base = None
+            for c in [_os.path.join(sdir, given),
+                      _os.path.join(sdir, given, "SKILL.md"),
+                      _os.path.join(sdir, given, "skill.md")]:
+                if _os.path.isfile(c):
+                    base = c
+                    break
+            if base is None:
+                say(f"⛔ skills/{given} not found", "red")
+            else:
+                from services.tools import _parse_skill_file as _psf
+                s = _psf(base, given)
+                memory.add_skill(db, user, s["name"], s["instructions"])
+                say(f"✅ imported {s['name']}", "green")
         else:
-            say("Usage: /skill list|use <name>", "yellow")
+            say("Usage: /skill list|use <name>|import <folder|file>", "yellow")
+    elif cmd == "/think":
+        from services.llm_client import THINK_LEVELS, think_config
+        if not args:
+            say(f"think={memory.get_preference(db, user, 'think', 'low')} (off|low|medium|high)", "cyan")
+        elif args[0] in THINK_LEVELS:
+            memory.set_preference(db, user, "think", args[0])
+            say(f"✅ think={args[0]}", "green")
+        else:
+            say("Usage: /think off|low|medium|high", "yellow")
+    elif cmd == "/autocompact":
+        if not args:
+            say(f"autocompact={memory.get_preference(db, user, 'autocompact', 'on')}", "cyan")
+        elif args[0] in ("on", "off"):
+            memory.set_preference(db, user, "autocompact", args[0])
+            say(f"✅ autocompact={args[0]}", "green")
+        else:
+            say("Usage: /autocompact on|off", "yellow")
     elif cmd == "/mcp":
         if not args or args[0] == "list":
             for s in list_servers():
@@ -163,22 +200,33 @@ def do_cmd(db, user, line: str) -> bool:
 
 def chat(db, user, text: str):
     ensure_model(db, user)
+    from services.llm_client import think_config
+    cfg = think_config(memory.get_preference(db, user, "think", "low"))
     system = build_system_prompt(user, SOUL)
+    if cfg.get("hint"):
+        system += f"\n\n{cfg['hint']}"
     skill = memory.get_preference(db, user, "active_skill")
     if skill:
         s = memory.get_skill(db, user, skill)
         if s:
             system += f"\n\n=== ACTIVE SKILL: {s.name} ===\n{s.instructions}"
-    hist = memory.get_history(db, user)
-    msgs = [{"role": "system", "content": system}] + hist + [{"role": "user", "content": text}]
+    sess = memory.get_current_session(db, user)
+    hist = memory.get_history(db, user, session=sess)
+    ctx = list(hist)
+    summary = memory.get_compact_summary(db, sess.id)
+    if summary:
+        ctx = [{"role": "system", "content": f"Earlier in this session (compacted):\n{summary}"}] + ctx
+    msgs = [{"role": "system", "content": system}] + ctx + [{"role": "user", "content": text}]
     try:
         from handlers.chat_handlers import _agentic_reply
-        reply, steps = _agentic_reply(user, msgs)
+        reply, steps = _agentic_reply(user, msgs, cfg)
     except Exception:
-        reply, steps = chat_completion(user, msgs), []
-    memory.add_message(db, user, "user", text)
-    memory.add_message(db, user, "assistant", reply, model_used=user.active_model)
-    if steps:
+        reply, steps = chat_completion(user, msgs, cfg["temperature"], cfg["max_tokens"]), []
+    memory.add_message(db, user, "user", text, session=sess)
+    memory.add_message(db, user, "assistant", reply, model_used=user.active_model, session=sess)
+    if memory.maybe_compact(db, user, sess):
+        say("🗜 autocompact: old messages summarized.", "cyan")
+    if steps and cfg.get("show_steps", True):
         say("🛠 " + ", ".join(dict.fromkeys(steps)), "yellow")
     say(reply or "(empty)")
 

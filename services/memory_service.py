@@ -1,5 +1,5 @@
 from sqlalchemy import desc
-from db.models import User, ConversationHistory, Session, UserPreference, Skill, Provider
+from db.models import User, ConversationHistory, Session, SessionSummary, UserPreference, Skill, Provider
 
 
 class MemoryService:
@@ -202,6 +202,66 @@ class MemoryService:
 
     def all_users(self, db):
         return db.query(User).all()
+
+    # ---- autocompact: summarize old session tail into SessionSummary ----
+
+    def get_compact_summary(self, db, session_id: int) -> str:
+        row = db.query(SessionSummary).filter(
+            SessionSummary.session_id == session_id).first()
+        return row.summary if row else ""
+
+    def maybe_compact(self, db, user, session=None) -> bool:
+        """If a session grew past 2x memory_window, summarize the oldest
+        messages into SessionSummary and delete them. Returns True if compacted.
+        Never raises — failures just skip compaction for this turn."""
+        try:
+            if (self.get_preference(db, user, "autocompact", "on") or "on").lower() in ("off", "0", "false", "no"):
+                return False
+            session = session or self.get_current_session(db, user)
+            window = user.memory_window or 20
+            threshold = max(window * 2, 40)
+            count = db.query(ConversationHistory).filter(
+                ConversationHistory.session_id == session.id).count()
+            if count <= threshold:
+                return False
+            keep = window
+            old_rows = (
+                db.query(ConversationHistory)
+                .filter(ConversationHistory.session_id == session.id)
+                .order_by(ConversationHistory.id.asc())
+                .limit(count - keep)
+                .all()
+            )
+            if not old_rows:
+                return False
+            from services.llm_client import chat_completion as _chat
+            transcript = "\n".join(f"{r.role}: {r.content[:800]}" for r in old_rows)
+            prev = self.get_compact_summary(db, session.id)
+            prompt = ("Summarize this conversation compactly for future context. "
+                      "Keep facts, decisions, names, preferences. Under 500 words.\n\n"
+                      + (f"Previous summary:\n{prev}\n\n" if prev else "")
+                      + f"New messages:\n{transcript}")
+            summary = _chat(user, [
+                {"role": "system", "content": "You compress chat history into dense memory."},
+                {"role": "user", "content": prompt},
+            ], max_tokens=800, temperature=0.3)
+            row = db.query(SessionSummary).filter(
+                SessionSummary.session_id == session.id).first()
+            if row:
+                row.summary = summary
+            else:
+                db.add(SessionSummary(session_id=session.id,
+                                      telegram_id=user.telegram_id, summary=summary))
+            for r in old_rows:
+                db.delete(r)
+            db.commit()
+            return True
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return False
 
     # ---- providers (multi base_url + key) ----
 

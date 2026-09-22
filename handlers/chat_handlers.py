@@ -38,17 +38,25 @@ def _db():
     return SessionLocal()
 
 
-def _agentic_reply(user, messages: list[dict]) -> tuple:
+def _agentic_reply(user, messages: list[dict], cfg: dict | None = None) -> tuple:
     """Run an agentic chat turn. Falls back to plain chat if tool-use is
     disabled or the model/endpoint doesn't support function calling.
     Returns (text, steps) where steps is the list of tool names used."""
+    from services.llm_client import think_config
+    cfg = cfg or think_config("low")
     if os.getenv("AGENTIC_TOOLS", "true").lower() == "false":
-        return chat_completion(user, messages), []
+        return chat_completion(user, messages,
+                               temperature=cfg["temperature"],
+                               max_tokens=cfg["max_tokens"]), []
     try:
-        return run_agentic(user, messages, TOOL_DEFINITIONS, TOOL_REGISTRY)
+        return run_agentic(user, messages, TOOL_DEFINITIONS, TOOL_REGISTRY,
+                           temperature=cfg["temperature"],
+                           max_tokens=cfg["max_tokens"])
     except Exception as e:
         logger.warning("agentic tool-call failed, falling back to plain chat: %s", e)
-        return chat_completion(user, messages), []
+        return chat_completion(user, messages,
+                               temperature=cfg["temperature"],
+                               max_tokens=cfg["max_tokens"]), []
 
 
 def _apply_theme(theme: str, text: str) -> str:
@@ -152,6 +160,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/profile - پروفایل\n"
         "/status - وضعیت فعلی بات\n"
         "/verbose 0|1|2 - سطح نمایش ابزارها\n"
+        "/think off|low|medium|high - سطح تفکر\n"
+        "/autocompact on|off - فشرده‌سازی خودکار سشن طولانی\n"
         "/theme default|compact|emoji|markdown - تم نمایش\n"
         "/skill add|list|use|del - اسکیل/پرسونای شخصی\n"
         "/history - تاریخچه سشن فعلی\n"
@@ -356,6 +366,54 @@ async def cmd_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.close()
 
 
+async def cmd_think(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services.llm_client import THINK_LEVELS
+    db = _db()
+    try:
+        user = memory.get_or_create_user(db, update.effective_user.id)
+        if not context.args:
+            cur = memory.get_preference(db, user, "think", "low")
+            await update.message.reply_text(
+                f"🧠 thinking level = {cur}\n"
+                "off = سریع/کم‌حرف (بدون نمایش ابزار)\n"
+                "low = معمولی (پیش‌فرض)\n"
+                "medium = دقیق‌تر، reasoning بیشتر\n"
+                "high = عمیق، step-by-step\n"
+                "مثال: /think high"
+            )
+            return
+        level = context.args[0].lower()
+        if level not in THINK_LEVELS:
+            await update.message.reply_text("⛔ فقط: off | low | medium | high")
+            return
+        memory.set_preference(db, user, "think", level)
+        await update.message.reply_text(f"✅ thinking level = {level}")
+    finally:
+        db.close()
+
+
+async def cmd_autocompact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = _db()
+    try:
+        user = memory.get_or_create_user(db, update.effective_user.id)
+        if not context.args:
+            cur = memory.get_preference(db, user, "autocompact", "on")
+            await update.message.reply_text(
+                f"🗜 autocompact = {cur}\n"
+                "وقتی سشن از ۲ برابر پنجره حافظه رد بشه، پیام‌های قدیمی خلاصه و حذف می‌شن.\n"
+                "مثال: /autocompact off"
+            )
+            return
+        val = context.args[0].lower()
+        if val not in ("on", "off"):
+            await update.message.reply_text("⛔ فقط: on | off")
+            return
+        memory.set_preference(db, user, "autocompact", val)
+        await update.message.reply_text(f"✅ autocompact = {val}")
+    finally:
+        db.close()
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = _db()
     try:
@@ -372,6 +430,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             "📊 وضعیت J-Rock:",
             f"provider: {user.active_provider or 'auto'}",
+            f"think: {prefs.get('think', 'low')} | autocompact: {prefs.get('autocompact', 'on')}",
             f"model: {user.active_model or os.getenv('DEFAULT_MODEL', '(انتخاب خودکار)')}",
             f"session: #{sess.id} ({sess.message_count} پیام)",
             f"verbose: {prefs.get('verbose', '1')}",
@@ -396,13 +455,18 @@ async def cmd_research(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = memory.get_or_create_user(db, update.effective_user.id)
         await _ensure_model(db, user)
+        from services.llm_client import think_config as _tc
+        _cfg = _tc(memory.get_preference(db, user, "think", "low"))
         system = user.system_prompt or "You are a deep research assistant."
+        if _cfg.get("hint"):
+            system += f"\n\n{_cfg['hint']}"
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Do deep research on: {topic}. Provide a structured report with cited points and a conclusion."},
         ]
         await update.message.reply_text("🔍 در حال پژوهش...")
-        reply = await asyncio.to_thread(chat_completion, user, messages)
+        reply = await asyncio.to_thread(chat_completion, user, messages,
+                                        _cfg["temperature"], _cfg["max_tokens"])
         memory.add_message(db, user, "user", f"/research {topic}")
         memory.add_message(db, user, "assistant", reply, model_used=user.active_model)
         for part in split_message(reply):
@@ -444,29 +508,44 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         verbose = int(memory.get_preference(db, user, "verbose", "1") or "1")
         theme = memory.get_preference(db, user, "theme", "default") or "default"
+        from services.llm_client import think_config
+        cfg = think_config(memory.get_preference(db, user, "think", "low"))
 
         # active skill (if any) is appended to the soul system prompt so it shapes
         # every reply without overwriting the user's base persona.
         system = build_system_prompt(user, _default_soul())
+        if cfg.get("hint"):
+            system += f"\n\n{cfg['hint']}"
         skill_name = memory.get_preference(db, user, "active_skill")
         if skill_name:
             skill = memory.get_skill(db, user, skill_name)
             if skill:
                 system = f"{system}\n\n=== ACTIVE SKILL: {skill.name} ===\n{skill.instructions}"
 
-        history = memory.get_history(db, user)
-        messages = [{"role": "system", "content": system}] + history + [{"role": "user", "content": text}]
+        sess = memory.get_current_session(db, user)
+        history = memory.get_history(db, user, session=sess)
+        context_msgs = list(history)
+        summary = memory.get_compact_summary(db, sess.id)
+        if summary:
+            context_msgs = [{"role": "system",
+                             "content": f"Earlier in this session (compacted):\n{summary}"}] + context_msgs
+        messages = [{"role": "system", "content": system}] + context_msgs + [{"role": "user", "content": text}]
         await update.message.chat.send_action("typing")
         try:
-            reply, steps = await asyncio.to_thread(_agentic_reply, user, messages)
+            reply, steps = await asyncio.to_thread(_agentic_reply, user, messages, cfg)
         except Exception as e:
             await update.message.reply_text(f"⚠️ خطا: {e}")
             return
-        memory.add_message(db, user, "user", text)
-        memory.add_message(db, user, "assistant", reply, model_used=user.active_model)
+        memory.add_message(db, user, "user", text, session=sess)
+        memory.add_message(db, user, "assistant", reply, model_used=user.active_model, session=sess)
+        if memory.maybe_compact(db, user, sess):
+            try:
+                await update.message.reply_text("🗜 سشن طولانی شد — قدیمی‌ها خلاصه و فشرده شد (autocompact).")
+            except Exception:
+                pass
 
         # show the tools the agent used (verbose 1 = names, 2 = names + short note)
-        if verbose >= 1 and steps:
+        if verbose >= 1 and steps and cfg.get("show_steps", True):
             seen = []
             for s in steps:
                 if s not in seen:

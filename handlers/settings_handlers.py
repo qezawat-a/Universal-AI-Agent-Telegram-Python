@@ -32,7 +32,7 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 J-Rock — pick an option or type /:\n"
         "/soul /skill /provider /mcp /gateway /settings /gen /image /web /fetch\n"
-        "/models /setmodel /setapi /profile /status /theme /verbose",
+        "/models /setmodel /setapi /profile /status /theme /verbose /think /autocompact",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
@@ -45,9 +45,10 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚙️ J-Rock settings\n"
             f"provider: {user.active_provider or 'auto'} | model: {user.active_model or 'auto'}\n"
+            f"think={prefs.get('think','low')} autocompact={prefs.get('autocompact','on')} "
             f"theme={prefs.get('theme','default')} verbose={prefs.get('verbose','1')} "
             f"tts={'on' if user.tts_enabled else 'off'} mem={user.memory_window}\n\n"
-            "/provider /setmodel /soul /skill /mcp /theme /verbose /tts /setmemory /setapi"
+            "/provider /setmodel /soul /skill /mcp /theme /verbose /think /autocompact /tts /setmemory /setapi"
         )
     finally:
         db.close()
@@ -100,12 +101,17 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⚠️ image failed (unsupported?): {e}")
             return
         system = build_system_prompt(user, _soul())
+        from services.llm_client import think_config as _tc2
+        _cfg2 = _tc2(memory.get_preference(db, user, "think", "low"))
+        if _cfg2.get("hint"):
+            system += f"\n\n{_cfg2['hint']}"
         if kind == "code":
             system += "\n\nReturn ONLY code with minimal comments."
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         await update.message.chat.send_action("typing")
         try:
-            reply = await asyncio.to_thread(chat_completion, user, msgs)
+            reply = await asyncio.to_thread(chat_completion, user, msgs,
+                                            _cfg2["temperature"], _cfg2["max_tokens"])
         except Exception as e:
             await update.message.reply_text(f"⚠️ gen failed: {e}")
             return

@@ -25,6 +25,8 @@ from .chat_handlers import (
     cmd_broadcast,
     cmd_verbose,
     cmd_theme,
+    cmd_think,
+    cmd_autocompact,
     cmd_status,
     handle_text,
 )
@@ -47,6 +49,7 @@ def register_handlers(app):
         ("setapi", cmd_setapi), ("models", cmd_models), ("setmodel", cmd_setmodel),
         ("setsystem", cmd_setsystem), ("setmemory", cmd_setmemory), ("tts", cmd_tts),
         ("profile", cmd_profile), ("verbose", cmd_verbose), ("theme", cmd_theme),
+        ("think", cmd_think), ("autocompact", cmd_autocompact),
         ("status", cmd_status), ("research", cmd_research), ("history", cmd_history),
         ("sessions", cmd_sessions), ("newchat", cmd_newchat), ("resume", cmd_resume),
         ("forget", cmd_forget), ("setpref", cmd_setpref), ("clearprefs", cmd_clearprefs),

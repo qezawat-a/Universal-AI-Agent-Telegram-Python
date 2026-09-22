@@ -61,6 +61,16 @@ class Session(Base):
     message_count = Column(Integer, default=0)
 
 
+class SessionSummary(Base):
+    __tablename__ = "session_summaries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"), nullable=False, unique=True)
+    telegram_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
+    summary = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class UserPreference(Base):
     __tablename__ = "user_preferences"
 

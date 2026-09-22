@@ -144,6 +144,26 @@ def _load_soul_file() -> str:
 DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", _load_soul_file())
 
 
+# Thinking levels: how hard the model reasons. Set per-user via /think.
+THINK_LEVELS = {
+    "off":    {"temperature": 0.7, "max_tokens": 1024, "hint": None,
+               "show_steps": False},
+    "low":    {"temperature": 0.7, "max_tokens": 2048, "hint": None,
+               "show_steps": True},
+    "medium": {"temperature": 0.5, "max_tokens": 4096,
+               "hint": "Reason carefully step by step before answering.",
+               "show_steps": True},
+    "high":   {"temperature": 0.3, "max_tokens": 8192,
+               "hint": ("Think very carefully step by step. "
+                        "Show your reasoning briefly, then give the final answer."),
+               "show_steps": True},
+}
+
+
+def think_config(level: str | None) -> dict:
+    return THINK_LEVELS.get((level or "low").lower(), THINK_LEVELS["low"])
+
+
 def _fernet():
     """Lazily build the Fernet cipher; never crash at import if cryptography
     is missing (e.g. Termux without Rust) or the key is invalid."""
@@ -247,14 +267,15 @@ def probe_model(user, model: str) -> None:
     )
 
 
-def chat_completion(user, messages: list[dict]) -> str:
+def chat_completion(user, messages: list[dict], temperature: float = 0.7,
+                    max_tokens: int = 2048) -> str:
     client = get_client(user)
     model = user.active_model or os.getenv("DEFAULT_MODEL", "gpt-4o")
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        max_tokens=2048,
-        temperature=0.7,
+        max_tokens=max_tokens,
+        temperature=temperature,
     )
     return response.choices[0].message.content
 
@@ -310,7 +331,8 @@ def generate_image(user, prompt: str, model: str | None = None, size: str | None
     }
 
 
-def run_agentic(user, messages: list[dict], tool_defs: list[dict], tool_registry: dict, max_iter: int = 8) -> str:
+def run_agentic(user, messages: list[dict], tool_defs: list[dict], tool_registry: dict, max_iter: int = 8,
+                temperature: float = 0.7, max_tokens: int = 2048) -> str:
     """Agentic chat loop with tool/function calling.
 
     Sends `messages` (with `tool_defs`) to the model. If the model emits
@@ -328,8 +350,8 @@ def run_agentic(user, messages: list[dict], tool_defs: list[dict], tool_registry
             messages=convo,
             tools=tool_defs,
             tool_choice="auto",
-            max_tokens=2048,
-            temperature=0.7,
+            max_tokens=max_tokens,
+            temperature=temperature,
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:
