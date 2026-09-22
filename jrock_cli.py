@@ -171,10 +171,26 @@ def do_cmd(db, user, line: str) -> bool:
         if not args or args[0] == "list":
             for s in list_servers():
                 say(f"• {s['name']} — {s.get('description','')}")
+        elif args[0] == "tools" and len(args) >= 2:
+            from services.mcp_client import mcp_list_tools
+            try:
+                for t in mcp_list_tools(args[1]):
+                    say(f"• {t.get('name')} — {(t.get('description') or '')[:100]}")
+            except Exception as e:
+                say(f"⚠️ {e}", "red")
+        elif args[0] == "call" and len(args) >= 3:
+            import json as _json
+            from services.mcp_client import mcp_call_tool
+            try:
+                a = _json.loads(" ".join(args[3:]) or "{}")
+            except Exception:
+                say("⛔ arguments must be valid JSON", "red")
+                return True
+            say(mcp_call_tool(args[1], args[2], a)[:4000])
         elif len(args) >= 2 and args[0] in ("fs", "read"):
             say(fs_list(args[1]) if args[0] == "fs" else fs_read(args[1])[:4000])
         else:
-            say("Usage: /mcp list|fs <path>|read <file>", "yellow")
+            say("Usage: /mcp list|tools <srv>|call <srv> <tool> [json]|fs <path>|read <file>", "yellow")
     elif cmd == "/newchat":
         s = memory.new_session(db, user)
         say(f"✅ new session #{s.id}", "green")

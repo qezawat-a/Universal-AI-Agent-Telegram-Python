@@ -17,6 +17,17 @@
       "args": ["mcp-server-sqlite", "--db-path", "/root/jrock/agent.db"],
       "enabled": true,
       "description": "SQLite memory"
+    },
+    "bitunix": {
+      "command": "bitunix-mcp",
+      "args": [],
+      "env": {
+        "BITUNIX_API_KEY": "$BITUNIX_API_KEY",
+        "BITUNIX_SECRET_KEY": "$BITUNIX_SECRET_KEY",
+        "BITUNIX_ENABLE_TRADING": "$BITUNIX_ENABLE_TRADING"
+      },
+      "enabled": true,
+      "description": "Bitunix exchange Spot+Futures (read-only unless BITUNIX_ENABLE_TRADING=true)"
     }
   }
 }
